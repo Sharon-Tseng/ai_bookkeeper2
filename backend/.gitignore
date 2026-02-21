@@ -9,3 +9,4 @@ credentials.json
 # 其他雜項
 notes.txt
 *.log
+tmp_uploads/
