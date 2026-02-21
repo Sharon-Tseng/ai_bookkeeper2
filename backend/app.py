@@ -2,6 +2,8 @@ import os
 import re
 import sqlite3
 import json
+import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import PIL.Image as Image
 from flask import Flask, jsonify, render_template, request, redirect, url_for
 from flask_cors import CORS
@@ -10,6 +12,11 @@ from agents import AccountAgents
 
 app = Flask(__name__)
 CORS(app)
+
+TEMP_UPLOAD_DIR = '/tmp/bookkeeper_uploads' if os.environ.get('VERCEL') else os.path.join(os.path.dirname(__file__), 'tmp_uploads')
+os.makedirs(TEMP_UPLOAD_DIR, exist_ok=True)
+RETRY_FILE_METADATA = {}
+MAX_CONCURRENT_FILES = 3
 
 # --- 資料庫與工具邏輯 ---
 def get_db_conn():
@@ -43,6 +50,47 @@ def get_user_sheets(username):
         cursor = conn.execute('SELECT DISTINCT sheet_url FROM user_sheets WHERE username = ?', (username,))
         return [row[0] for row in cursor.fetchall()]
 
+def persist_uploaded_file(file_storage):
+    _, ext = os.path.splitext(file_storage.filename or '')
+    filename = f"{uuid.uuid4().hex}{ext.lower() or '.png'}"
+    file_path = os.path.join(TEMP_UPLOAD_DIR, filename)
+    file_storage.save(file_path)
+    RETRY_FILE_METADATA[filename] = file_storage.filename
+    return filename, file_path
+
+def run_bookkeeper_for_file(file_path, spreadsheet_id):
+    with Image.open(file_path) as img:
+        return AccountAgents.run_bookkeeper(img.copy(), spreadsheet_id)
+
+def remove_temp_file(file_path):
+    try:
+        if file_path and os.path.exists(file_path):
+            os.remove(file_path)
+    except OSError:
+        pass
+
+def run_parallel_jobs(task_items, worker):
+    if not task_items:
+        return []
+
+    results = []
+    with ThreadPoolExecutor(max_workers=MAX_CONCURRENT_FILES) as executor:
+        future_map = {executor.submit(worker, item): item for item in task_items}
+        for future in as_completed(future_map):
+            item = future_map[future]
+            try:
+                results.append(future.result())
+            except Exception as error:
+                results.append({
+                    "index": item.get("index", 0),
+                    "filename": item.get("filename", "-"),
+                    "success": False,
+                    "message": f"Error: {str(error)}",
+                    "retry_token": item.get("retry_token")
+                })
+
+    return sorted(results, key=lambda row: row.get("index", 0))
+
 # 初始化資料庫
 init_db()
 
@@ -55,24 +103,118 @@ def index():
 @app.route('/app', methods=['GET', 'POST'])
 def app_page():
     saved_sheets = get_user_sheets('default_user')
-    result = None
+    results = []
+    result_summary = None
     sheet_url = ''
     
     if request.method == 'POST':
         sheet_url = request.form.get('sheet_url')
-        file = request.files.get('receipt')
+        retry_tokens_raw = request.form.get('retry_tokens', '').strip()
+        files = request.files.getlist('receipts') or request.files.getlist('receipt')
+        valid_files = [file for file in files if file and file.filename]
         
-        if sheet_url and file:
+        if sheet_url and (valid_files or retry_tokens_raw):
             try:
                 spreadsheet_id = get_spreadsheet_id(sheet_url)
+                if not spreadsheet_id:
+                    raise ValueError("Invalid Google Sheet URL")
                 save_user_sheet('default_user', sheet_url)
-                
-                img = Image.open(file.stream)
-                result = AccountAgents.run_bookkeeper(img, spreadsheet_id)
+
+                if retry_tokens_raw:
+                    retry_tokens = [token.strip() for token in retry_tokens_raw.split(',') if token.strip()]
+                    retry_tasks = []
+                    for index, token in enumerate(retry_tokens, start=1):
+                        retry_tasks.append({
+                            "index": index,
+                            "token": token,
+                            "file_path": os.path.join(TEMP_UPLOAD_DIR, token),
+                            "filename": RETRY_FILE_METADATA.get(token, f"retry_{token[:8]}"),
+                            "retry_token": token
+                        })
+
+                    def retry_worker(task):
+                        if not os.path.exists(task["file_path"]):
+                            raise FileNotFoundError("Temporary file not found for retry")
+
+                        message = run_bookkeeper_for_file(task["file_path"], spreadsheet_id)
+                        remove_temp_file(task["file_path"])
+                        RETRY_FILE_METADATA.pop(task["token"], None)
+
+                        return {
+                            "index": task["index"],
+                            "filename": task["filename"],
+                            "success": True,
+                            "message": message,
+                            "retry_token": None
+                        }
+
+                    results.extend(run_parallel_jobs(retry_tasks, retry_worker))
+                else:
+                    upload_tasks = []
+                    for index, file in enumerate(valid_files, start=1):
+                        try:
+                            retry_token, file_path = persist_uploaded_file(file)
+                            upload_tasks.append({
+                                "index": index,
+                                "filename": file.filename,
+                                "retry_token": retry_token,
+                                "file_path": file_path
+                            })
+                        except Exception as file_error:
+                            results.append({
+                                "index": index,
+                                "filename": file.filename,
+                                "success": False,
+                                "message": f"Error: {str(file_error)}",
+                                "retry_token": None
+                            })
+
+                    def upload_worker(task):
+                        try:
+                            message = run_bookkeeper_for_file(task["file_path"], spreadsheet_id)
+                            remove_temp_file(task["file_path"])
+                            RETRY_FILE_METADATA.pop(task["retry_token"], None)
+                            return {
+                                "index": task["index"],
+                                "filename": task["filename"],
+                                "success": True,
+                                "message": message,
+                                "retry_token": None
+                            }
+                        except Exception as file_error:
+                            return {
+                                "index": task["index"],
+                                "filename": task["filename"],
+                                "success": False,
+                                "message": f"Error: {str(file_error)}",
+                                "retry_token": task["retry_token"]
+                            }
+
+                    results.extend(run_parallel_jobs(upload_tasks, upload_worker))
             except Exception as e:
-                result = f"Error: {str(e)}"
+                results = [{
+                    "index": 1,
+                    "filename": "-",
+                    "success": False,
+                    "message": f"Error: {str(e)}",
+                    "retry_token": None
+                }]
+
+            if results:
+                success_count = sum(1 for row in results if row.get("success"))
+                result_summary = {
+                    "total": len(results),
+                    "success": success_count,
+                    "failed": len(results) - success_count,
+                }
                 
-    return render_template('add_record.html', saved_sheets=saved_sheets, sheet_url=sheet_url, result=result)
+    return render_template(
+        'add_record.html',
+        saved_sheets=saved_sheets,
+        sheet_url=sheet_url,
+        results=results,
+        result_summary=result_summary
+    )
 
 @app.route('/view_history', methods=['GET', 'POST'])
 def view_history_page():
@@ -98,16 +240,66 @@ def upload_receipt_api():
     """Flutter 專用：上傳收據並寫入試算表"""
     try:
         sheet_url = request.form.get('sheet_url')
-        file = request.files.get('receipt')
-        if not sheet_url or not file:
+        files = request.files.getlist('receipts') or request.files.getlist('receipt')
+        valid_files = [file for file in files if file and file.filename]
+
+        if not sheet_url or not valid_files:
             return jsonify({"success": False, "error": "缺少網址或檔案"}), 400
 
         spreadsheet_id = get_spreadsheet_id(sheet_url)
+        if not spreadsheet_id:
+            return jsonify({"success": False, "error": "無效的 Google Sheet URL"}), 400
         save_user_sheet('default_user', sheet_url)
-        
-        img = Image.open(file.stream)
-        result = AccountAgents.run_bookkeeper(img, spreadsheet_id) 
-        return jsonify({"success": True, "message": result})
+
+        file_results = []
+        upload_tasks = []
+        for index, file in enumerate(valid_files, start=1):
+            try:
+                retry_token, file_path = persist_uploaded_file(file)
+                upload_tasks.append({
+                    "index": index,
+                    "filename": file.filename,
+                    "retry_token": retry_token,
+                    "file_path": file_path
+                })
+            except Exception as file_error:
+                file_results.append({
+                    "index": index,
+                    "filename": file.filename,
+                    "success": False,
+                    "message": str(file_error)
+                })
+
+        def api_upload_worker(task):
+            try:
+                message = run_bookkeeper_for_file(task["file_path"], spreadsheet_id)
+                return {
+                    "index": task["index"],
+                    "filename": task["filename"],
+                    "success": True,
+                    "message": message
+                }
+            except Exception as file_error:
+                return {
+                    "index": task["index"],
+                    "filename": task["filename"],
+                    "success": False,
+                    "message": str(file_error)
+                }
+            finally:
+                remove_temp_file(task["file_path"])
+                RETRY_FILE_METADATA.pop(task["retry_token"], None)
+
+        file_results.extend(run_parallel_jobs(upload_tasks, api_upload_worker))
+        file_results = sorted(file_results, key=lambda row: row.get("index", 0))
+        success_count = sum(1 for row in file_results if row.get("success"))
+
+        return jsonify({
+            "success": success_count > 0,
+            "processed_count": len(valid_files),
+            "success_count": success_count,
+            "results": file_results
+        })
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 

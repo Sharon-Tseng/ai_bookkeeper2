@@ -6,6 +6,7 @@ from agent_tools import write_to_sheets
 from io import BytesIO
 from dotenv import load_dotenv
 from datetime import datetime
+from PIL import Image
 
 # Load environment variables from .env file
 load_dotenv()
@@ -19,7 +20,7 @@ else:
 gemini_llm = ChatGoogleGenerativeAI(
     model="gemini-2.5-flash", 
     temperature=0,
-    include_thoughts = True)
+    include_thoughts = False)
 
 bookkeeper_graph_agent = create_agent(
     gemini_llm, 
@@ -30,8 +31,11 @@ bookkeeper_graph_agent = create_agent(
 class AccountAgents:
     @staticmethod
     def run_bookkeeper(image_data, spreadsheet_id):
+        prepared_image = image_data.copy()
+        prepared_image.thumbnail((1200, 1200), Image.Resampling.LANCZOS)
+
         buffered = BytesIO()
-        image_data.save(buffered, format="PNG")
+        prepared_image.save(buffered, format="PNG", optimize=True)
         base64_image = base64.b64encode(buffered.getvalue()).decode("utf-8")
 
         # create unique thought_signature for sessions

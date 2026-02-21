@@ -55,11 +55,11 @@
                         <p><small>Service Email: <code>bookkeeper-agent@utopian-nimbus-482915-d0.iam.gserviceaccount.com</code></small></p>
                         
                         <hr>
-                        <h3>Step 2: Upload Receipt</h3>
-                        <input type="file" name="receipt" accept="image/*" required>
+                        <h3>Step 2: Upload Receipt(s)</h3>
+                        <input type="file" name="receipts" accept="image/*" multiple required>
                         <br><br>
                         
-                        {% if not result %}
+                        {% if not results %}
                          <div class="button-container" style="margin-top: 15px;">
                             <button type="submit" id="submit-button">🚀 Process </button>
                             <button type="reset" id="clear-button"> Clear </button>
@@ -73,10 +73,47 @@
             </form>
         </div>
 
-        {% if result %}
+        {% if results %}
         <div class="box">
-            <h3>Result:</h3>
-            <div class="result">{{ result }}</div>
+            <h3>Results:</h3>
+            {% if result_summary %}
+            <div style="margin-bottom: 12px; padding: 10px; background-color: #f7f9fc; border: 1px solid #e6ebf2; border-radius: 8px;">
+                <strong>Summary:</strong>
+                Total {{ result_summary.total }} ｜ Success {{ result_summary.success }} ｜ Failed {{ result_summary.failed }}
+            </div>
+            {% endif %}
+            {% set failed_rows = results | selectattr('success', 'equalto', false) | list %}
+            {% if failed_rows %}
+            <div style="margin-bottom: 12px; padding: 10px; background-color: #fff5f5; border: 1px solid #ffd5d5; border-radius: 8px;">
+                <strong style="color: #c62828;">Failed Items (Please retry):</strong>
+                <div style="margin-top: 8px;">
+                    {% for row in failed_rows %}
+                    <div style="margin-bottom: 6px;">
+                        ❌ #{{ row.index }} - {{ row.filename }}：{{ row.message }}
+                    </div>
+                    {% endfor %}
+                </div>
+                {% set retry_rows = failed_rows | selectattr('retry_token') | list %}
+                {% if retry_rows %}
+                <form method="POST" style="margin-top: 10px;">
+                    <input type="hidden" name="sheet_url" value="{{ sheet_url }}">
+                    <input type="hidden" name="retry_tokens" value="{% for row in retry_rows %}{{ row.retry_token }}{% if not loop.last %},{% endif %}{% endfor %}">
+                    <button type="submit">🔁 Retry Failed Items</button>
+                </form>
+                {% endif %}
+            </div>
+            {% endif %}
+            <div class="result">
+                {% for row in results %}
+                    <div style="margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid #eee;">
+                        <strong>{% if row.success %}✅{% else %}❌{% endif %} #{{ row.index }} - {{ row.filename }}</strong>
+                        <span style="margin-left: 8px; font-size: 12px; color: {% if row.success %}#2e7d32{% else %}#c62828{% endif %};">
+                            {% if row.success %}Success{% else %}Failed{% endif %}
+                        </span><br>
+                        <span>{{ row.message }}</span>
+                    </div>
+                {% endfor %}
+            </div>
             <div class="button-container" style="margin-top: 15px;">
                 <button type = "button" onclick="window.location.href='{{ sheet_url }}'">Open Google Sheet</button>
                 <button type = "button" onclick="window.location.href='/app'">Process Another Receipt</button>
