@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>AI Bookkeeper</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="apple-mobile-web-app-title" content="AI Bookkeeper">
+
+    <meta name="mobile-web-app-capable" content="yes">
+</head>
+<body>
+    <nav class="top-nav">
+        <div class="nav-header">
+            <button class="menu-toggle" onclick="toggleMenu()">☰ Menu</button>
+        </div>
+        <div id="nav-links" class="nav-links">
+            <a href="/" class="nav-item">Home</a>
+            <a href="/app" class="nav-item">Add a Record</a>
+            <a href="/view_history" class="nav-item">View History</a>
+        </div>
+    </nav>
+
+    <div id="main">
+        <button class="openbtn" onclick="toggleMenu()">☰ Menu</button>
+        <div class="main-content">
+            <h1>View History</h1>
+            <div class="box">
+                <h3>Your recent activity will be displayed here.</h3>
+
+                {% if saved_sheets %}
+                <div style="margin-bottom: 20px; padding: 10px; background-color: #f9f9f9; border-radius: 5px;">
+                    <h4 style="margin-top: 0;">Saved Spreadsheets:</h4>
+                    <ul style="list-style-type: none; padding-left: 0;">
+                        {% for url in saved_sheets %}
+                        <li style="margin-bottom: 8px;">
+                            <a href="/view_history?sheet_url={{ url|urlencode }}" style="text-decoration: none; color: #4A90E2; font-size: 14px;">
+                                📄 {{ url[:60] }}{% if url|length > 60 %}...{% endif %}
+                            </a>
+                        </li>
+                        {% endfor %}
+                    </ul>
+                </div>
+                <hr style="border: 0; border-top: 1px solid #eee; margin: 20px 0;">
+                {% endif %}
+
+                {% if view_history %}
+                <div class="box">
+                    <h3>View History Items</h3>
+                    <ul style="list-style-type: none; padding-left: 0;">
+                        {% for item in view_history %}
+                        <li style="margin-bottom: 8px;">
+                            <span style="font-weight: bold;">{{ item.date }}</span>: 
+                            <span>{{ item.description }}</span> - 
+                            <span style="color: green;">${{ item.amount }}</span>
+                        </li>
+                        {% endfor %}
+                    </ul>
+                </div>
+                <hr style="border: 0; border-top: 1px solid #eee; margin: 20px 0;">
+                {% endif %}
+
+                <form id="upload-form" method="POST" action="/view_history" enctype="multipart/form-data">
+                        <label>Google Sheet URL:</label>
+                        <input type="text" name="sheet_url" placeholder="Paste URL here..." required value="{{ sheet_url }}">
+                        <p><small>Service Email: <code>bookkeeper-agent@utopian-nimbus-482915-d0.iam.gserviceaccount.com</code></small></p>
+                        
+                        <div class="button-container" style="margin-top: 15px;">
+                            <button type="submit" form="upload-form"> History </button>
+                            <button type="button" onclick="openSheet()">Open Google Sheet</button>
+                        </div>
+                    </form>
+        </div>
+        {% if history %}
+        <div class="box" style="display: flex; flex-direction: column; gap: 20px;">
+    
+            <div style="display: flex; align-items: center; width: 100%;">
+            <br>
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <h3 style="margin: 0;">Select Month(s) to Display:</h3>
+                    <select id="monthSelector" multiple style="width: 200px; height: 40px; border: 1px solid #ccc; border-radius: 4px;">
+                        {% for month in history.keys() %}
+                        <option value="{{ month }}">{{ month }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <br>
+                <div style="flex-grow: 1;"></div>
+
+                <button id="updateChart" style="padding: 10px 20px; cursor: pointer; background-color: #4A90E2; color: white; border: none; border-radius: 4px; font-weight: bold;"> 
+                    Update Chart 
+                </button>
+            </div>
+
+            <div style="padding: 10px 0; border-top: 1px solid #eee;">
+                <h3 style="display: inline; margin-right: 10px;">Total Spending for Selected Month(s):</h3>
+                <span id="totalSpending" style="font-size: 22px; font-weight: bold; color: #333;">$0.00</span>
+            </div>
+
+            <div style="width: 100%;">
+                <canvas id="SpendingChart" width="400" height="150"></canvas>
+            </div>
+        </div>
+        {% endif %}
+        {% if total_trend %}
+        <div class="box">
+            <h3>Total Spending Trend</h3>
+            <canvas id="TotalTrendChart" width="400" height="200"></canvas>
+        </div>
+        {% endif %}
+
+        <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    </div>
+
+    <script>
+        function toggleMenu() {
+            const navLinks = document.getElementById("nav-links");
+            if (navLinks.classList.contains("active")) {
+                navLinks.classList.remove("active");
+            } else {
+                navLinks.classList.add("active");
+            }
+        }
+        document.querySelectorAll('.nav-item').forEach(link => {
+            link.addEventListener('click', () => {
+                document.getElementById("nav-links").classList.remove("active");
+            });
+        });
+    </script>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const monthData = `{{ history | tojson | safe }}`;
+            const trendData = `{{ total_trend | tojson | safe }}`;
+            let dataObj = {};
+            let trendObj = {};
+
+            try {
+                dataObj = JSON.parse(monthData);
+                trendObj = JSON.parse(trendData);
+            } catch(e) {
+                console.error("Failed to parse JSON:", e);
+                return;
+            }
+
+            const totalSpendingElement = document.getElementById('totalSpending');
+            const spendingCanvas = document.getElementById('SpendingChart');
+            const trendCanvas = document.getElementById('TotalTrendChart');
+            if (!spendingCanvas || !trendCanvas) return;
+
+            const spendingCtx = spendingCanvas.getContext('2d');
+            const trendCtx = trendCanvas.getContext('2d');
+            let spendingChart;
+            let trendChart;
+
+            function updateSpendingChart() {
+                const select = document.getElementById('monthSelector');
+                const selectedMonths = Array.from(select.selectedOptions).map(opt => opt.value);
+
+                const allCategories = new Set();
+                selectedMonths.forEach(month => {
+                    if (dataObj[month]) {
+                        Object.keys(dataObj[month]).forEach(cat => allCategories.add(cat));
+                    }
+                });
+                const labels = Array.from(allCategories);
+
+                let totalSpending = 0;
+                const colors = [
+                    'rgba(75, 192, 192, 0.7)', 'rgba(255, 99, 132, 0.7)', 
+                    'rgba(54, 162, 235, 0.7)', 'rgba(255, 206, 86, 0.7)', 
+                    'rgba(153, 102, 255, 0.7)', 'rgba(255, 159, 64, 0.7)'
+                ];
+
+                const datasets = selectedMonths.map((month, index) => {
+                    const monthData = dataObj[month] || {};
+                    const data = labels.map(cat => monthData[cat] || 0);
+                    totalSpending += Object.values(monthData).reduce((a, b) => a + b, 0);
+                    return {
+                        label: month,
+                        data: data,
+                        backgroundColor: colors[index % colors.length],
+                        borderColor: colors[index % colors.length].replace('0.7', '1'),
+                        borderWidth: 1
+                    };
+                });
+
+                totalSpendingElement.textContent = `$${totalSpending.toFixed(2)}`;
+                if (spendingChart) spendingChart.destroy();
+
+                spendingChart = new Chart(spendingCtx, {
+                    type: 'bar',
+                    data: {
+                        labels: labels,
+                        datasets: datasets
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: true,
+                        scales: { 
+                            x: { stacked: true },
+                            y: { stacked: true, beginAtZero: true } 
+                        }
+                    },
+                    plugins: {
+                        tooltip: {
+                            mode: 'index',
+                            intersect: false
+                        }
+                    }
+                });
+            }
+
+            function renderTrendChart() {
+                const labels = Object.keys(trendObj);
+                const data = Object.values(trendObj);
+
+                if (trendChart) trendChart.destroy();
+
+                trendChart = new Chart(trendCtx, {
+                    type: 'line',
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            label: 'Total Spending Trend',
+                            data: data,
+                            borderColor: 'rgba(75, 192, 192, 1)',
+                            backgroundColor: 'rgba(75, 192, 192, 0.2)',
+                            fill: true,
+                            tension: 0.4
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: true,
+                        scales: {
+                            y: { beginAtZero: true }
+                        }
+                    }
+                });
+            }
+
+            const monthSelector = document.getElementById('monthSelector');
+            if (monthSelector.options.length > 0) {
+                monthSelector.options[monthSelector.options.length - 1].selected = true;
+            }
+
+            updateSpendingChart();
+            renderTrendChart();
+
+            document.getElementById('updateChart').addEventListener('click', updateSpendingChart);
+        });
+    </script>
+
+    <script>
+    function openSheet() {
+    const inputField = document.querySelector('input[name="sheet_url"]');
+    let url = inputField ? inputField.value.trim() : "";
+    
+    if (url && url !== "") {
+        if (!url.startsWith('http')) {
+            url = 'https://' + url;
+        }
+        console.log("Opening URL:", url); 
+        window.open(url, '_blank'); 
+    } else {
+        alert("Please enter a Google Sheet URL first!");
+    }
+}
+</script>
+
+
+</body>
+</html>

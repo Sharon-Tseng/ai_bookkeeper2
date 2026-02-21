@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<html>
+<head>
+    <title> AI Bookkeeper </title>
+    <link rel="stylesheet" href="/static/style.css">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="apple-mobile-web-app-title" content="AI Bookkeeper">
+
+    <meta name="mobile-web-app-capable" content="yes">
+</head>
+<body>
+    <nav class="top-nav">
+        <div class="nav-header">
+            <button class="menu-toggle" onclick="toggleMenu()">☰ Menu</button>
+        </div>
+        <div id="nav-links" class="nav-links">
+            <a href="/" class="nav-item">Home</a>
+            <a href="/app" class="nav-item">Add a Record</a>
+            <a href="/view_history" class="nav-item">View History</a>
+        </div>
+    </nav>
+
+    <div id="main">
+        <button class="openbtn" onclick="toggleMenu()">☰ Menu</button>
+        <div class="main-content">
+            <h1>Add a record</h1>
+                <div class="box">
+                    <h3>Step 1: Configuration</h3>
+
+                    {% if saved_sheets %}
+                    <div style="margin-bottom: 20px; padding: 12px; background-color: #f0f7ff; border-radius: 8px; border: 1px solid #d0e3ff;">
+                        <h4 style="margin-top: 0; color: #0056b3; font-size: 0.9em;">Quick Select Saved Sheet:</h4>
+                        <div style="max-height: 120px; overflow-y: auto;">
+                            {% for url in saved_sheets %}
+                            <div style="display: flex; align-items: center; margin-bottom: 8px;">
+                                <input type="radio" name="saved_selector" id="sheet_{{ loop.index }}" 
+                                    onclick="document.getElementById('sheet_url_input').value='{{ url }}'"
+                                    {% if sheet_url == url %}checked{% endif %}>
+                                <label for="sheet_{{ loop.index }}" style="font-size: 13px; margin-left: 8px; cursor: pointer; color: #444; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                                    📄 {{ url[:70] }}...
+                                </label>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    <div style="text-align: center; margin-bottom: 15px; color: #888; font-size: 0.8em;">— OR —</div>
+                    {% endif %}
+
+                    <form id="upload-form" method="POST" enctype="multipart/form-data">
+                        <label>Google Sheet URL:</label>
+                        <input type="text" name="sheet_url" id="sheet_url_input" placeholder="Paste URL here..." required value="{{ sheet_url }}">
+                        <p><small>Service Email: <code>bookkeeper-agent@utopian-nimbus-482915-d0.iam.gserviceaccount.com</code></small></p>
+                        
+                        <hr>
+                        <h3>Step 2: Upload Receipt</h3>
+                        <input type="file" name="receipt" accept="image/*" required>
+                        <br><br>
+                        
+                        {% if not result %}
+                         <div class="button-container" style="margin-top: 15px;">
+                            <button type="submit" id="submit-button">🚀 Process </button>
+                            <button type="reset" id="clear-button"> Clear </button>
+                        </div>
+                        {% endif %}
+
+                        <div id="loading-container" style="display: none; margin-top: 15px;">
+                            <div class="loader"></div>
+                            <strong>Processing...</strong> 
+                        </div>
+            </form>
+        </div>
+
+        {% if result %}
+        <div class="box">
+            <h3>Result:</h3>
+            <div class="result">{{ result }}</div>
+            <div class="button-container" style="margin-top: 15px;">
+                <button type = "button" onclick="window.location.href='{{ sheet_url }}'">Open Google Sheet</button>
+                <button type = "button" onclick="window.location.href='/app'">Process Another Receipt</button>
+                <button type="button" onclick="window.location.href='/app'"> 🗑️ Clear All </button>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <script>
+        let sidebarOpen = true;
+        function toggleMenu() {
+            const navLinks = document.getElementById("nav-links");
+            navLinks.classList.toggle("active");
+        }
+
+        document.getElementById('upload-form').onsubmit = function() {
+            // 1. Show loading UI
+            document.getElementById('submit-button').style.display = 'none';
+            document.getElementById('clear-button').style.display = 'none';
+            document.getElementById('loading-container').style.display = 'block';
+
+            // 2. Save to localStorage
+            let url = document.getElementById('sheet_url_input').value;
+            if (url) {
+                let saved = JSON.parse(localStorage.getItem('saved_sheets') || '[]');
+                if (!saved.includes(url)) {
+                    saved.push(url);
+                    localStorage.setItem('saved_sheets', JSON.stringify(saved));
+                }
+            }
+        };
+
+        // Load saved URLs on page load
+        window.onload = function() {
+            let saved = JSON.parse(localStorage.getItem('saved_sheets') || '[]');
+            let container = document.getElementById('saved-sheets-container');
+        };
+    </script>
+
+</body>
+</html>

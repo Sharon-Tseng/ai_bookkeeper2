@@ -1,0 +1,11 @@
+# Python 虛擬環境
+.venv/
+__pycache__/
+
+# 敏感憑證
+.env
+credentials.json
+
+# 其他雜項
+notes.txt
+*.log
