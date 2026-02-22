@@ -7,8 +7,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import PIL.Image as Image
 from flask import Flask, jsonify, render_template, request, redirect, url_for
 from flask_cors import CORS
-from agent_tools import load_raw_expense_data
-from agents import AccountAgents
+from backend.agent_tools import load_raw_expense_data
+from backend.agents import AccountAgents
 
 app = Flask(__name__)
 CORS(app)
